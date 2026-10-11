@@ -16,6 +16,7 @@ Script time zone is `America/New_York`.
 ## Deploy habit
 
 Always update the existing deployment. Never create a new one for an update.
+("Deploy > New deployment" in the `Code.gs` header applies to the very first deploy only.)
 
 1. Deploy > Manage deployments > edit (pencil) the existing web app deployment.
 2. Version: **New version**, then Deploy.
@@ -28,10 +29,12 @@ needed, update both URLs and redeploy both apps.
 ## Terms date format
 
 `Start` and `End` on the Terms tab are **plain text in `yyyy-MM-dd`** (e.g. `2026-09-14`),
-not Sheets Date values. This avoids time zone shifts when dates cross between Sheets and
-script. Parse them as local dates in `America/New_York`, and write any new dates the same
-way (format with `Utilities.formatDate(d, tz, 'yyyy-MM-dd')`). A blank Start/End means
-the term's dates are not set yet (e.g. Spring).
+not Sheets Date values. `setup()` sets every column to the `@` (text) number format, and
+rows are read with `getDisplayValues()`, so dates stay strings end to end and compare
+correctly as strings. Parse with `parseDate_()` (a local date, no time zone shift) and
+write with `fmtDate_()`. A blank Start/End means the term's dates are not set yet
+(e.g. Spring), and code must skip undated terms. The Terms tab is the source of truth;
+`CONFIG.TERM_START`/`TERM_END` are only a fallback for when no term is dated.
 
 Other tabs follow the same convention: Visits `Date` is `yyyy-MM-dd`, `Start`/`End` are
 `HH:mm`, and visit keys are `<eventId>|yyyy-MM-ddTHH:mm`.
@@ -40,12 +43,26 @@ Other tabs follow the same convention: Visits `Date` is `yyyy-MM-dd`, `Start`/`E
 
 Columns: `Email | Name | Department | IsDean | Title | Keyword`.
 
-- The main app runs as the owner. Access is an **allowlist**: the signed-in user's email
-  must match a row in Chairs, or the app denies access.
-- A chair sees only their own `Department`'s teachers, visits, and notes.
-- `IsDean = TRUE` sees all departments (deans have no Department).
-- `Keyword` is that chair's calendar title prefix used by Sync (default `Class Visit`).
-- Only the owner edits the Chairs tab. Never add a code path that lets a user change
-  their own row, and never trust a department or email sent from the client; always
-  derive identity server-side from the signed-in session (or the verified OAuth token
-  that Sync sends).
+The main app runs as the deployer (Dan), so the script itself can read and write the
+whole Sheet. All access control is in code, driven by the Chairs tab:
+
+- **Allowlist.** `currentUser_()` matches `Session.getActiveUser().getEmail()` against
+  Chairs. No row means role `none`, and `requireUser_()` throws. Every `api*` function
+  must start with `requireUser_()`.
+- **Roles.** `IsDean = TRUE` is role `dean`; anything else is role `chair`.
+- **Department scope.** `deptFilter_(u)`: a chair sees only rows whose `Department`
+  equals their own. A dean sees every department.
+- **Notes are private by default.** `noteVisible_()`: the author always sees their own
+  notes. A dean also sees a note when its `VisibleTo` list contains that dean's `Title`.
+  Other chairs never see each other's notes, even within a department.
+- **Deans are read-only.** Every write API checks `u.role === 'chair'`. Sync (`doPost`)
+  also rejects dean rows.
+- **Keyword** is the chair's calendar title prefix (default `Class Visit`). The only
+  in-app write to Chairs is `apiSaveSettings`, which changes the caller's own Keyword.
+  Everything else in Chairs is maintained by hand in the Sheet by the owner. Don't widen
+  that write.
+- **Identity is server-side only.** Never trust an email, role, or department sent from
+  the page. In `doPost`, identity comes from the chair's OAuth token, checked through
+  Google's tokeninfo endpoint, and must be on the `berkshireschool.org` domain.
+- Department Drive folders (`ensureDeptFolder_`) are shared as editor with that
+  department's non-dean chairs.
